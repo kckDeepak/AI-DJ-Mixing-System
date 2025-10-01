@@ -2,12 +2,17 @@ import json
 import google.generativeai as genai
 from datetime import datetime, timedelta
 import random
+from dotenv import load_dotenv
+import os
+import re
 
-# Configure Gemini API (replace with your API key)
-genai.configure(api_key="")  # Replace with actual API key
+# Load environment variables
+load_dotenv()
 
-# Simulated BPM data for songs (since we don't have Spotify API here)
-# In a real implementation, this would come from the Track Analysis Engine
+# Configure Gemini API
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+# Simulated BPM data for songs
 SONG_BPM_DB = {
     "R&B": [
         {"title": "Adore You", "artist": "Miley Cyrus", "bpm": 120},
@@ -28,12 +33,6 @@ SONG_BPM_DB = {
         {"title": "Joro", "artist": "Wizkid", "bpm": 98}
     ]
 }
-
-import json
-import re
-import google.generativeai as genai
-
-# ... (rest of your existing code)
 
 def parse_time_segments(user_input):
     """Parse user input to extract time segments and preferences."""
@@ -81,49 +80,37 @@ def generate_setlist(parsed_data):
         end_time = segment["end"]
         description = segment["description"].lower()
         
-        # Determine duration of segment in minutes
         start_dt = datetime.strptime(start_time, "%H:%M")
         end_dt = datetime.strptime(end_time, "%H:%M")
         duration = (end_dt - start_dt).total_seconds() / 60
+        num_tracks = max(1, int(duration // 3.5))
         
-        # Estimate number of tracks (assuming ~3.5 minutes per track)
-        num_tracks = int(duration // 3.5)
-        if num_tracks < 1:
-            num_tracks = 1
-        
-        # Collect candidate tracks
         candidate_tracks = []
         genres = parsed_data["genres"]
         specific_songs = parsed_data["specific_songs"]
         
-        # Add specific songs first
         for song in specific_songs:
             for genre, tracks in SONG_BPM_DB.items():
                 if any(s["title"] == song["title"] and s["artist"] == song["artist"] for s in tracks):
                     candidate_tracks.append(song)
         
-        # Add genre-based tracks
         for genre in genres:
             if genre in SONG_BPM_DB:
                 candidate_tracks.extend(SONG_BPM_DB[genre])
         
-        # Shuffle candidates to add variety
         random.shuffle(candidate_tracks)
         
-        # Select tracks with BPM constraints
         selected_tracks = []
         last_bpm = None
         
         for track in candidate_tracks:
             if len(selected_tracks) >= num_tracks:
                 break
-                
-            current_bpm = track.get("bpm", random.randint(80, 140))  # Fallback BPM if not provided
+            current_bpm = track.get("bpm", random.randint(80, 140))
             if last_bpm is None or abs(last_bpm - current_bpm) <= 5:
                 selected_tracks.append({"title": track["title"], "artist": track["artist"]})
                 last_bpm = current_bpm
         
-        # If not enough tracks, fill with random tracks from genres
         while len(selected_tracks) < num_tracks and candidate_tracks:
             track = random.choice(candidate_tracks)
             current_bpm = track.get("bpm", random.randint(80, 140))
@@ -140,18 +127,19 @@ def generate_setlist(parsed_data):
     return setlist
 
 def track_identification_engine(user_input):
-    """Main function to process user input and generate setlist."""
-    # Step 1: Parse user input
-    parsed_data = parse_time_segments(user_input)
-    
-    # Step 2: Generate setlist
-    setlist = generate_setlist(parsed_data)
-    
-    # Step 3: Output JSON
-    output = {"setlist": setlist}
-    return json.dumps(output, indent=2)
+    """Process user input and save setlist to JSON file."""
+    try:
+        parsed_data = parse_time_segments(user_input)
+        setlist = generate_setlist(parsed_data)
+        output = {"setlist": setlist}
+        
+        with open("setlist.json", "w") as f:
+            json.dump(output, f, indent=2)
+        print("Setlist saved to 'setlist.json'")
+    except Exception as e:
+        print(f"Error in Track Identification Engine: {str(e)}")
+        raise
 
-# Example usage
 if __name__ == "__main__":
     user_input = (
         "I need a mix between 7pm and 10pm for a Casino. At 8pm there will be dinner, "
@@ -159,5 +147,4 @@ if __name__ == "__main__":
         "and these songs specifically: [{'title': 'Tum Hi Ho', 'artist': 'Arijit Singh'}, "
         "{'title': 'Ye', 'artist': 'Burna Boy'}]."
     )
-    result = track_identification_engine(user_input)
-    print(result)
+    track_identification_engine(user_input)

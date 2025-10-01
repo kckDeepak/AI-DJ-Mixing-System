@@ -1,0 +1,81 @@
+{
+  "mixing_plan": [
+    {
+      "from_track": "No Scrubs",
+      "to_track": "Tum Hi Ho",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Tum Hi Ho",
+      "to_track": "On the Low",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "On the Low",
+      "to_track": "Ye",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Ye",
+      "to_track": "Joro",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Joro",
+      "to_track": "On the Low",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "On the Low",
+      "to_track": "Ye",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Ye",
+      "to_track": "Joro",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Joro",
+      "to_track": "No Scrubs",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "No Scrubs",
+      "to_track": "Tum Hi Ho",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Blinding Lights",
+      "to_track": "Blinding Lights",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    },
+    {
+      "from_track": "Say My Name",
+      "to_track": "Say My Name",
+      "transition_point": "first chorus",
+      "transition_type": "Crossfade",
+      "comment": "Smooth handoff into balanced vibe track section."
+    }
+  ]
+}
