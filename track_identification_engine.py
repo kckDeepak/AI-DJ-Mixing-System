@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import random
 
 # Configure Gemini API (replace with your API key)
-genai.configure(api_key="AIzaSyA3NhSUvHbESoedS0O4TLKRbQoI6XyXM5s")  # Replace with actual API key
+genai.configure(api_key="")  # Replace with actual API key
 
 # Simulated BPM data for songs (since we don't have Spotify API here)
 # In a real implementation, this would come from the Track Analysis Engine
