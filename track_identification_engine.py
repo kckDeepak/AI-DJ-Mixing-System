@@ -36,7 +36,7 @@ SONG_BPM_DB = {
 
 def parse_time_segments(user_input):
     """Parse user input to extract time segments and preferences."""
-    model = genai.GenerativeModel("gemini-2.5-pro")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     
     prompt = f"""
     Parse the following user input into a structured JSON format with time segments, preferred genres, and specific songs (if any).
