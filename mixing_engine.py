@@ -1,5 +1,11 @@
+# mixing_engine.py
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from pydub import AudioSegment
+from pydub.effects import high_pass_filter, low_pass_filter
+import os
+
+SONGS_DIR = "./songs"
 
 def is_harmonic_key(from_key, to_key):
     """Check if two keys are harmonically compatible (simplified Camelot Wheel logic)."""
@@ -49,44 +55,82 @@ def generate_mixing_notes(from_track, to_track, time_segment, transition_type):
     
     return notes
 
-def generate_mixing_plan(analyzed_setlist_json):
-    """Generate a mixing plan for track pairs and save to JSON file."""
+def apply_transition(segment1, segment2, transition_type, duration_ms=5000):
+    """Apply DJ transition using pydub."""
+    if transition_type == "Crossfade":
+        overlap = duration_ms
+        crossfade = segment1[-overlap:].fade_out(overlap).overlay(segment2[:overlap].fade_in(overlap))
+        return segment1[:-overlap] + crossfade + segment2[overlap:]
+    elif transition_type == "EQ Sweep":
+        # Simulate EQ sweep: high pass on outgoing, low pass on incoming
+        outgoing = high_pass_filter(segment1[-duration_ms:], 200)
+        incoming = low_pass_filter(segment2[:duration_ms], 5000)
+        return segment1[:-duration_ms] + outgoing.overlay(incoming) + segment2[duration_ms:]
+    elif transition_type == "Echo-Drop":
+        # Simulate echo-drop
+        echo = segment1[-duration_ms:] - 10  # Quieter echo
+        return segment1[:-duration_ms] + echo + segment2.fade_in(duration_ms)
+    elif transition_type == "Fade Out/Fade In":
+        return segment1.fade_out(duration_ms) + segment2.fade_in(duration_ms)
+    else:
+        return segment1 + segment2  # Default
+
+def generate_mixing_plan_and_mix(analyzed_setlist_json):
+    """Generate mixing plan for track pairs and save to JSON file, plus create MP3 mix."""
     try:
         analyzed_data = json.loads(analyzed_setlist_json)
         mixing_plan = []
+        current_time = datetime.strptime("00:00", "%H:%M")
+        full_mix = AudioSegment.empty()
         
         for segment in analyzed_data["analyzed_setlist"]:
             time_range = segment["time"]
             tracks = segment["analyzed_tracks"]
             
-            for i in range(len(tracks) - 1):
-                from_track = tracks[i]
-                to_track = tracks[i + 1]
+            for i in range(len(tracks)):
+                track = tracks[i]
+                file_path = os.path.join(SONGS_DIR, track["file"])
+                audio = AudioSegment.from_mp3(file_path)
                 
-                transition_type = suggest_transition_type(from_track, to_track)
-                notes = generate_mixing_notes(from_track, to_track, time_range, transition_type)
+                start_str = current_time.strftime("%H:%M:%S")
                 
-                transition = {
-                    "from_track": from_track["track"],
-                    "to_track": to_track["track"],
-                    "transition_point": "first chorus",
-                    "transition_type": transition_type,
-                    "comment": notes
-                }
-                mixing_plan.append(transition)
-            
-            if len(tracks) == 1:
-                mixing_plan.append({
-                    "from_track": tracks[0]["track"],
-                    "to_track": None,
-                    "transition_point": "first chorus",
-                    "transition_type": "Fade In",
-                    "comment": f"Start {tracks[0]['notes'].split('.')[0].lower()} section."
-                })
+                if i == 0:
+                    transition_type = "Fade In"
+                    comment = f"Start {track['notes'].split('.')[0].lower()} section."
+                    mixing_plan.append({
+                        "from_track": None if i == 0 else tracks[i-1]["track"],
+                        "to_track": track["track"],
+                        "start_time": start_str,
+                        "transition_point": "first chorus",
+                        "transition_type": transition_type,
+                        "comment": comment
+                    })
+                    full_mix += audio.fade_in(2000)
+                else:
+                    from_track = tracks[i-1]
+                    transition_type = suggest_transition_type(from_track, track)
+                    comment = generate_mixing_notes(from_track, track, time_range, transition_type)
+                    mixing_plan.append({
+                        "from_track": from_track["track"],
+                        "to_track": track["track"],
+                        "start_time": start_str,
+                        "transition_point": "first chorus",
+                        "transition_type": transition_type,
+                        "comment": comment
+                    })
+                    trans_audio = apply_transition(full_mix[-5000:], audio, transition_type)
+                    full_mix = full_mix[:-5000] + trans_audio
+                
+                duration_sec = len(audio) / 1000
+                current_time += timedelta(seconds=duration_sec)
         
         with open("mixing_plan.json", "w") as f:
             json.dump({"mixing_plan": mixing_plan}, f, indent=2)
         print("Mixing plan saved to 'mixing_plan.json'")
+        
+        full_mix.export("mix.mp3", format="mp3")
+        print("Mix exported to 'mix.mp3'")
+        
     except Exception as e:
         print(f"Error in Mixing Engine: {str(e)}")
         raise
@@ -101,6 +145,7 @@ if __name__ == "__main__":
                     {
                         "track": "Tum Hi Ho",
                         "artist": "Arijit Singh",
+                        "file": "Arijit Singh - Tum Hi Ho.mp3",
                         "bpm": 94,
                         "key": "A",
                         "genre": "bollywood",
@@ -113,6 +158,7 @@ if __name__ == "__main__":
                     {
                         "track": "No Scrubs",
                         "artist": "TLC",
+                        "file": "TLC - No Scrubs.mp3",
                         "bpm": 93,
                         "key": "G#m",
                         "genre": "r&b",
@@ -130,6 +176,7 @@ if __name__ == "__main__":
                     {
                         "track": "Ye",
                         "artist": "Burna Boy",
+                        "file": "Burna Boy - Ye.mp3",
                         "bpm": 100,
                         "key": "F",
                         "genre": "afrobeats",
@@ -142,6 +189,7 @@ if __name__ == "__main__":
                     {
                         "track": "Essence",
                         "artist": "Wizkid ft. Tems",
+                        "file": "Wizkid ft. Tems - Essence.mp3",
                         "bpm": 104,
                         "key": "C",
                         "genre": "afrobeats",
@@ -156,4 +204,4 @@ if __name__ == "__main__":
         ]
     }
     '''
-    generate_mixing_plan(sample_analyzed_setlist_json)
+    generate_mixing_plan_and_mix(sample_analyzed_setlist_json)

@@ -1,6 +1,7 @@
+# track_identification_engine.py
 import json
 import google.generativeai as genai
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
 from dotenv import load_dotenv
 import os
@@ -12,34 +13,41 @@ load_dotenv()
 # Configure Gemini API
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Simulated BPM data for songs
-SONG_BPM_DB = {
-    "R&B": [
-        {"title": "Adore You", "artist": "Miley Cyrus", "bpm": 120},
-        {"title": "No Scrubs", "artist": "TLC", "bpm": 93},
-        {"title": "Say My Name", "artist": "Destiny's Child", "bpm": 138},
-        {"title": "Blinding Lights", "artist": "The Weeknd", "bpm": 171}
-    ],
-    "Bollywood": [
-        {"title": "Tum Hi Ho", "artist": "Arijit Singh", "bpm": 94},
-        {"title": "Kal Ho Naa Ho", "artist": "Sonu Nigam", "bpm": 84},
-        {"title": "Badtameez Dil", "artist": "Benny Dayal", "bpm": 106},
-        {"title": "Dilli Wali Girlfriend", "artist": "Arijit Singh", "bpm": 115}
-    ],
-    "Afrobeats": [
-        {"title": "Ye", "artist": "Burna Boy", "bpm": 100},
-        {"title": "On the Low", "artist": "Wizkid", "bpm": 97},
-        {"title": "Essence", "artist": "Wizkid ft. Tems", "bpm": 104},
-        {"title": "Joro", "artist": "Wizkid", "bpm": 98}
-    ]
-}
+# Directory for local MP3 songs
+SONGS_DIR = "./songs"
 
-def parse_time_segments(user_input):
-    """Parse user input to extract time segments and preferences."""
+def get_available_songs():
+    """Scan the songs directory and return a list of available songs."""
+    available_songs = []
+    for filename in os.listdir(SONGS_DIR):
+        if filename.lower().endswith(".mp3"):
+            # Clean filename to extract artist and title
+            clean_name = filename[:-4]
+            if clean_name.startswith("[iSongs.info] "):
+                clean_name = clean_name.split(" - ", 1)[-1] if " - " in clean_name else clean_name.split(" ", 2)[-1]
+            parts = clean_name.split(" - ", 1)
+            if len(parts) == 2:
+                artist, title = parts
+            else:
+                artist = "Unknown"
+                title = clean_name
+            available_songs.append({"title": title, "artist": artist, "file": filename})
+    return available_songs
+
+def parse_time_segments_and_generate_setlist(user_input, available_songs):
+    """Parse user input and generate setlist using LLM, considering available local songs."""
     model = genai.GenerativeModel("gemini-2.5-flash")
     
+    available_songs_str = json.dumps(available_songs, indent=2)
+    
     prompt = f"""
-    Parse the following user input into a structured JSON format with time segments, preferred genres, and specific songs (if any).
+    Parse the following user input into time segments, preferred genres, and specific songs.
+    Then, generate a structured setlist by selecting a pool of songs (unordered) from the available local songs list below for each time segment.
+    Prioritize specific songs if they match available ones. Select songs that fit the genres, vibe, and description.
+    Ensure the number of tracks approximately covers the time duration (3-4 min per track). Do not order the tracks yet; provide them as an unordered list for each segment.
+    
+    Available local songs: {available_songs_str}
+    
     Input: "{user_input}"
     
     Output format:
@@ -49,89 +57,46 @@ def parse_time_segments(user_input):
             ...
         ],
         "genres": ["genre1", "genre2", ...],
-        "specific_songs": [{{"title": "string", "artist": "string"}}, ...]
+        "specific_songs": [{{"title": "string", "artist": "string"}}, ...],
+        "setlist": [
+            {{
+                "time": "HH:MM–HH:MM",
+                "tracks": [
+                    {{"title": "string", "artist": "string", "file": "string.mp3"}},
+                    ...
+                ]
+            }},
+            ...
+        ]
     }}
-    Provide ONLY the JSON object in your response. Do not include any additional text, explanations, or code block markers.
+    Provide ONLY the JSON object in your response.
     """
     
     response = model.generate_content(prompt)
     
-    # Attempt to find the JSON within a potential code block
     json_match = re.search(r'```json\n(.*?)\n```', response.text, re.DOTALL)
     if json_match:
         json_string = json_match.group(1)
     else:
-        json_string = response.text.strip() # Fallback to the whole response
+        json_string = response.text.strip()
 
     try:
         parsed_data = json.loads(json_string)
         return parsed_data
     except json.JSONDecodeError as e:
         print(f"DEBUG: Failed to parse JSON. Raw response text: '{response.text}'")
-        print(f"DEBUG: String being parsed: '{json_string}'")
         raise ValueError("Failed to parse Gemini response into JSON") from e
-
-def generate_setlist(parsed_data):
-    """Generate a setlist ensuring BPM difference of ±5 between consecutive tracks."""
-    setlist = []
-    
-    for segment in parsed_data["time_segments"]:
-        start_time = segment["start"]
-        end_time = segment["end"]
-        description = segment["description"].lower()
-        
-        start_dt = datetime.strptime(start_time, "%H:%M")
-        end_dt = datetime.strptime(end_time, "%H:%M")
-        duration = (end_dt - start_dt).total_seconds() / 60
-        num_tracks = max(1, int(duration // 3.5))
-        
-        candidate_tracks = []
-        genres = parsed_data["genres"]
-        specific_songs = parsed_data["specific_songs"]
-        
-        for song in specific_songs:
-            for genre, tracks in SONG_BPM_DB.items():
-                if any(s["title"] == song["title"] and s["artist"] == song["artist"] for s in tracks):
-                    candidate_tracks.append(song)
-        
-        for genre in genres:
-            if genre in SONG_BPM_DB:
-                candidate_tracks.extend(SONG_BPM_DB[genre])
-        
-        random.shuffle(candidate_tracks)
-        
-        selected_tracks = []
-        last_bpm = None
-        
-        for track in candidate_tracks:
-            if len(selected_tracks) >= num_tracks:
-                break
-            current_bpm = track.get("bpm", random.randint(80, 140))
-            if last_bpm is None or abs(last_bpm - current_bpm) <= 5:
-                selected_tracks.append({"title": track["title"], "artist": track["artist"]})
-                last_bpm = current_bpm
-        
-        while len(selected_tracks) < num_tracks and candidate_tracks:
-            track = random.choice(candidate_tracks)
-            current_bpm = track.get("bpm", random.randint(80, 140))
-            if last_bpm is None or abs(last_bpm - current_bpm) <= 5:
-                selected_tracks.append({"title": track["title"], "artist": track["artist"]})
-                last_bpm = current_bpm
-            candidate_tracks.remove(track)
-        
-        setlist.append({
-            "time": f"{start_time}–{end_time}",
-            "tracks": selected_tracks
-        })
-    
-    return setlist
 
 def track_identification_engine(user_input):
     """Process user input and save setlist to JSON file."""
     try:
-        parsed_data = parse_time_segments(user_input)
-        setlist = generate_setlist(parsed_data)
-        output = {"setlist": setlist}
+        available_songs = get_available_songs()
+        data = parse_time_segments_and_generate_setlist(user_input, available_songs)
+        output = {
+            "setlist": data["setlist"],
+            "genres": data["genres"],
+            "specific_songs": data["specific_songs"]
+        }
         
         with open("setlist.json", "w") as f:
             json.dump(output, f, indent=2)
