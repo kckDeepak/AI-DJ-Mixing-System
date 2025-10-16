@@ -43,7 +43,10 @@ def parse_time_segments_and_generate_setlist(user_input, available_songs):
     prompt = f"""
     Parse the following user input into time segments, preferred genres, and specific songs.
     Then, generate a structured setlist by selecting a pool of songs (unordered) from the available local songs list below for each time segment.
-    Prioritize specific songs if they match available ones. Select songs that fit the genres, vibe, and description.
+    Prioritize specific songs if they match available ones exactly by title and artist. 
+    For specific songs mentioned in the input that are not in available local songs, list them in unavailable_songs with reason 'not found'.
+    Do not include unavailable songs in the setlist tracks.
+    Select songs that fit the genres, vibe, and description.
     Ensure the number of tracks approximately covers the time duration (3-4 min per track). Do not order the tracks yet; provide them as an unordered list for each segment.
     
     Available local songs: {available_songs_str}
@@ -58,6 +61,7 @@ def parse_time_segments_and_generate_setlist(user_input, available_songs):
         ],
         "genres": ["genre1", "genre2", ...],
         "specific_songs": [{{"title": "string", "artist": "string"}}, ...],
+        "unavailable_songs": [{{"title": "string", "artist": "string", "reason": "string"}}, ...],
         "setlist": [
             {{
                 "time": "HH:MM–HH:MM",
@@ -95,7 +99,8 @@ def track_identification_engine(user_input):
         output = {
             "setlist": data["setlist"],
             "genres": data["genres"],
-            "specific_songs": data["specific_songs"]
+            "specific_songs": data["specific_songs"],
+            "unavailable_songs": data.get("unavailable_songs", [])
         }
         
         with open("setlist.json", "w") as f:
