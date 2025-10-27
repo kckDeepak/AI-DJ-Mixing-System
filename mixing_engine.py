@@ -81,6 +81,8 @@ def apply_transition(segment1: AudioSegment,
     try:
         y2, sr2 = audio_segment_to_np(segment2)
         y1, sr1 = audio_segment_to_np(segment1)
+        
+        # Beatmatching: Tempo synchronization - Stretch incoming track based on otac to match BPM
         if abs(otac) > 0.01:
             rate = 1.0 + otac * (max(duration_ms, eq_match_duration_ms) / 1000.0) / 60.0
             y2_stretched = librosa.effects.time_stretch(y2, rate=rate)
@@ -106,6 +108,8 @@ def apply_transition(segment1: AudioSegment,
             y1_full, sr_full = audio_segment_to_np(segment1)
             y2_full, _ = audio_segment_to_np(segment2_stretched)
             match_sec = eq_overlap / float(sr_full)
+            
+            # Beatmatching: Phase/beat alignment - Compute onset-based lag for alignment
             lag_seconds = find_best_alignment(y1_full, sr_full, y2_full, sr_full, match_duration_sec=match_sec)
             lag_ms = int(lag_seconds * 1000.0)
             # Support both delay and advance without skipping content
