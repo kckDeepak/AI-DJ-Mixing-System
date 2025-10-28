@@ -2,96 +2,229 @@
 
 ## Overview
 
-This project is an AI-powered DJ system that generates and mixes a curated setlist based on natural language user prompts (e.g., venue, vibe, time schedule, audience preferences). It processes your local MP3 songs, analyzes them for metadata like BPM, key, energy, valence, and danceability, and creates a seamless DJ mix with transitions. The system outputs JSON files for the setlist, analysis, and mixing plan, along with a final mixed MP3 file.
+The **AI DJ Mixing System** is a fully automated, intelligent DJ pipeline that transforms natural language user prompts into a **professional, seamless, mixed MP3** — complete with beat-matched transitions, harmonic key alignment, tempo adjustments, and context-aware energy flow.
 
-The system is composed of three main engines:
-1. **Track Identification Engine**: Parses user input using Gemini AI to select songs from your local library that fit the prompt.
-2. **Track Analysis Engine**: Analyzes selected MP3s using Librosa to extract audio features and sorts tracks for optimal transitions.
-3. **Mixing Engine**: Applies DJ transitions (e.g., crossfade, EQ sweep) using PyDub and generates the final mix MP3.
+From a single sentence like *"I need a 3-hour casino mix: chill R&B dinner at 8pm, high-energy dancing from 9pm with Bollywood and Afrobeats"*, the system:
+1. **Selects** the best-matching songs from your local `./songs` library.
+2. **Analyzes** each track for BPM, key, energy, valence, danceability, vocal presence, and structural segments.
+3. **Sorts** tracks within time segments for smooth energy progression.
+4. **Generates** a detailed **mixing plan** with precise start times, transition types (crossfade, EQ sweep, echo drop, etc.), and tempo correction (OTAC).
+5. **Renders** a final `mix.mp3` with **beat-synced, phase-aligned, harmonically compatible transitions**.
 
-This is designed for personal use with your own legally obtained MP3 songs. It runs offline except for the initial Gemini API call for setlist generation.
+The system runs **mostly offline** — only the **initial setlist generation** uses Google Gemini AI. All audio analysis and mixing are performed locally using **Librosa** and **PyDub**.
+
+---
+
+## Key Features
+
+| Feature | Description |
+|-------|-----------|
+| **Natural Language Input** | Describe your event, time blocks, vibe, and must-play songs. |
+| **Smart Track Selection** | Matches songs by genre, energy, and explicit requests. |
+| **Advanced Audio Analysis** | Extracts BPM, key, scale, energy, valence, danceability, vocal detection, and beat grid. |
+| **Harmonic Mixing** | Ensures key compatibility (same key, ±1 semitone, perfect fifth/fourth). |
+| **Tempo Sync (OTAC)** | Calculates logarithmic tempo ramping for smooth BPM transitions. |
+| **Beat & Phase Alignment** | Uses onset correlation to align downbeats during transitions. |
+| **Multiple Transition Types** | Crossfade, EQ Sweep, Echo Drop, Backspin, Reverb, Loop, Build Drop, and more. |
+| **Time-Aware Setlist** | Splits mix into segments (e.g., dinner → dancing) with tailored energy curves. |
+| **JSON Planning Outputs** | Full transparency via `setlist.json`, `analyzed_setlist.json`, `mixing_plan.json`. |
+| **Final MP3 Export** | Normalized, high-quality mix ready for playback. |
+
+---
 
 ## Prerequisites
 
-To run this project, you need:
-- **Python 3.8+**: Installed on your system.
-- **FFmpeg**: Required for audio processing with PyDub. Download and install from [ffmpeg.org](https://ffmpeg.org/download.html) and add it to your PATH.
-- **Google Gemini API Key**: Sign up at [ai.google.dev](https://ai.google.dev) to get a free API key for the Gemini model. Add it to a `.env` file in the project root as `GEMINI_API_KEY=your_key_here`.
-- **Local MP3 Songs**: You must have your own MP3 files in the `./songs` directory. The system assumes filenames like "Artist - Title.mp3" or similar (it cleans names like "[iSongs.info] 01 - Song.mp3"). Without songs, the pipeline won't work. Collect legal MP3s matching your preferred genres (e.g., R&B, Bollywood, Afrobeats).
+| Requirement | Details |
+|-----------|--------|
+| **Python** | `3.8+` |
+| **FFmpeg** | Required for PyDub. [Download here](https://ffmpeg.org/download.html) and add to `PATH`. |
+| **Google Gemini API Key** | Free tier available at [ai.google.dev](https://ai.google.dev). Add to `.env` as: <br> `GEMINI_API_KEY=your_key_here` |
+| **Local MP3 Library** | Place your legally obtained songs in `./songs/`. <br> Supported naming: `Artist - Title.mp3`, `[iSongs.info] 01 - Song.mp3`, etc. |
 
-Note: Processing a 3-hour mix takes approximately 10 minutes, depending on your hardware (due to audio analysis and mixing).
+> **Performance Note**: A 3-hour mix takes ~8–12 minutes on a modern CPU (analysis + rendering).
+
+---
 
 ## Installation
 
-1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/ai-dj-mixing-system.git
-   cd ai-dj-mixing-system
-   ```
+```bash
+# 1. Clone the repo
+git clone https://github.com/yourusername/ai-dj-mixing-system.git
+cd ai-dj-mixing-system
 
-2. Create and activate a virtual environment (recommended):
-   ```
-   python -m venv myenv
-   source myenv/bin/activate  # On Windows: myenv\Scripts\activate
-   ```
+# 2. Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-3. Install dependencies from `requirements.txt`:
-   ```
-   pip install -r requirements.txt
-   ```
+# 3. Install dependencies
+pip install -r requirements.txt
+```
 
-   If `requirements.txt` doesn't exist yet, create it with these packages:
-   ```
-   google-generativeai
-   librosa
-   numpy
-   pydub
-   python-dotenv
-   ```
+
+---
 
 ## Usage
 
-1. Place your MP3 songs in the `./songs` folder.
+### 1. Prepare Your Songs
+```bash
+./songs/
+├── Arijit Singh - Tum Hi Ho.mp3
+├── TLC - No Scrubs.mp3
+├── Burna Boy - Ye.mp3
+└── ...
+```
 
-2. Update the user prompt in `run_pipeline.py` (or pass it as needed). Example prompt:
-   ```
-   user_input = (
-       "I need a mix between 7pm and 10pm for a Casino. At 8pm there will be dinner, "
-       "then dancing starts at 9pm. Most of our customers prefer R&B, Bollywood, Afrobeats "
-       "and these songs specifically: [{'title': 'Tum Hi Ho', 'artist': 'Arijit Singh'}, "
-       "{'title': 'Ye', 'artist': 'Burna Boy'}]."
-   )
-   ```
+### 2. Run the Pipeline
+```bash
+python run_pipeline.py
+```
 
-3. Run the pipeline:
-   ```
-   python run_pipeline.py
-   ```
+> You can **customize the prompt** directly in `run_pipeline.py`:
 
-   This will:
-   - Generate `setlist.json`: Selected songs (unordered pool) per time segment.
-   - Generate `analyzed_setlist.json`: Analyzed features and sorted order for smooth transitions.
-   - Generate `mixing_plan.json`: Timings, song names, transition types (e.g., crossfade, EQ sweep), and comments.
-   - Export `mix.mp3`: The final DJ-mixed audio file.
+```python
+user_input = (
+    "Create a 3-hour mix for a luxury casino. "
+    "7–8pm: elegant dinner with chill R&B and Bollywood ballads. "
+    "8–9pm: transition to upbeat Afrobeats and danceable R&B. "
+    "9–10pm: high-energy dance floor with must-play songs: "
+    "[{'title': 'Tum Hi Ho', 'artist': 'Arijit Singh'}, "
+    "{'title': 'Ye', 'artist': 'Burna Boy'}]."
+)
+```
 
-## Code Structure
+### 3. Output Files
 
-- **track_identification_engine.py**: Uses Gemini AI to parse prompts and select songs from your local `./songs` directory.
-- **track_analysis_engine.py**: Analyzes MP3s with Librosa, computes features, and sorts tracks by BPM for better mixing.
-- **mixing_engine.py**: Applies transitions with PyDub based on analysis and exports the MP3 mix.
-- **run_pipeline.py**: Orchestrates the full process from prompt to output.
+| File | Description |
+|------|-------------|
+| `setlist.json` | Raw selected tracks per time segment. |
+| `analyzed_setlist.json` | Full audio analysis + sorted playback order. |
+| `mixing_plan.json` | Professional DJ cue sheet with start times, transitions, OTAC, and comments. |
+| `mix.mp3` | Final mixed audio file (normalized, ready to play). |
 
-The pipeline is modular: Identification selects songs, Analysis extracts/sorts, Mixing builds the plan and audio.
+---
 
-## Output Example
+## Pipeline Architecture
 
-- **setlist.json**: Time segments with selected songs (e.g., tracks as list of {"title", "artist", "file"}).
-- **analyzed_setlist.json**: Features like BPM, energy, and sorted order per segment.
-- **mixing_plan.json**: Array of transitions with start times, types (varied like crossfade, EQ sweep), and notes.
-- **mix.mp3**: A single MP3 file with the full mix, including DJ effects.
+```mermaid
+graph TD
+    A[User Prompt] --> B(track_identification_engine.py)
+    B --> C[setlist.json]
+    C --> D(track_analysis_engine.py)
+    D --> E[analyzed_setlist.json]
+    E --> F(generate_mixing_plan.py)
+    F --> G[mixing_plan.json]
+    G --> H(generate_mix.py)
+    H --> I[mix.mp3]
+```
 
-For a 3-hour casino mix, expect varied transitions beyond just fades, thanks to BPM/energy-based logic.
+### 1. `track_identification_engine.py`
+- Uses **Gemini 1.5 Flash** to parse natural language.
+- Scans `./songs/` and matches songs by title, artist, and genre.
+- Outputs time-segmented `setlist.json`.
+
+### 2. `track_analysis_engine.py`
+- Loads MP3s with **Librosa**.
+- Extracts:
+  - BPM (beat tracking)
+  - Key & scale (chroma + correlation)
+  - Energy, valence, danceability (via spectral features)
+  - Vocal presence (source separation)
+  - Structural segments (intro, verse, chorus, etc.)
+- Sorts tracks **within each time block** by energy progression.
+
+### 3. `generate_mixing_plan.py`
+- Computes **harmonic compatibility** (semitone shifts).
+- Calculates **OTAC** (Optimal Tempo Adjustment Coefficient) for smooth BPM ramps.
+- Suggests **transition type** based on:
+  - BPM difference
+  - Key compatibility
+  - Vocal overlap
+- Outputs `mixing_plan.json` with:
+  - Start time (HH:MM:SS)
+  - Transition type
+  - OTAC value
+  - Comment (e.g., "Transition TLC → Burna Boy. Suggested 'EQ Sweep'.")
+
+### 4. `generate_mix.py`
+- Applies **real-time audio processing**:
+  - Tempo stretching (Librosa `time_stretch`)
+  - Beat/phase alignment via **onset correlation**
+  - Transition effects:
+    - **Crossfade** (default)
+    - **EQ Sweep** (high-pass outgoing, low-pass incoming)
+    - **Echo Drop**, **Backspin**, **Reverb**, **Loop**, **Build Drop**
+- Normalizes and exports `mix.mp3`.
+
+### 5. `run\_pipeline.py`
+- Orchestrates all stages.
+- Validates file outputs.
+- Logs progress with timestamps.
+
+---
+
+## Sample `mixing_plan.json` Output
+
+```json
+{
+  "mixing_plan": [
+    {
+      "from_track": null,
+      "to_track": "Tum Hi Ho",
+      "start_time": "00:00:00",
+      "transition_point": "downbeat align",
+      "transition_type": "Fade In",
+      "otac": 0.0,
+      "comment": "Start balanced vibe section."
+    },
+    {
+      "from_track": "Tum Hi Ho",
+      "to_track": "No Scrubs",
+      "start_time": "00:03:12",
+      "transition_point": "beat grid match",
+      "transition_type": "Crossfade",
+      "otac": -0.0018,
+      "comment": "Transition Tum Hi Ho -> No Scrubs. Suggested 'Crossfade'."
+    }
+  ]
+}
+```
+
+---
+
+## Customization Options
+
+| Parameter | File | Default | Purpose |
+|---------|------|--------|--------|
+| `first_fade_in_ms` | `generate_mixing_plan.py`, `generate_mix.py` | 5000 | Fade-in for first track |
+| `crossfade_early_ms` | Same | 5500 | Early overlap for crossfades |
+| `eq_match_ms` | Same | 15000 | Duration of EQ sweep transitions |
+| `match_duration_sec` | `generate_mix.py` | 15.0 | Onset alignment window |
+
+---
+
+## Troubleshooting
+
+| Issue | Solution |
+|------|----------|
+| `setlist.json not created` | Check `.env` has `GEMINI_API_KEY` |
+| `Missing file: ...` | Ensure MP3s are in `./songs/` and named correctly |
+| `FFmpeg not found` | Install FFmpeg and add to `PATH` |
+| `Numba warnings` | Suppressed by default via `NUMBA_DISABLE_JIT=1` |
+| Slow processing | Analysis is CPU-heavy; normal for long mixes |
+
+---
 
 ## License
 
-MIT License. Feel free to modify and use! If you encounter issues, check console logs for errors like missing files or API keys.
+**MIT License** — Free to use, modify, and distribute.
+
+> **Disclaimer**: This tool is for **personal, non-commercial use** with **legally obtained music**. Respect copyright laws.
+
+---
+
+**Made with [music note] by DJs, for DJs.**  
+*Let the AI handle the math. You handle the vibe.*
+
+--- 
+
+*Last Updated: October 28, 2025*
