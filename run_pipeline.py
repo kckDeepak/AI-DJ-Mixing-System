@@ -115,10 +115,7 @@ if __name__ == "__main__":
     and specific song requests. Calls run_pipeline() to execute the full pipeline and generate the mix.
     """
     user_input = (
-        "I need a mix between 7pm and 10pm for a Casino. At 8pm there will be dinner, "
-        "then dancing starts at 9pm. Most of our customers prefer R&B, Bollywood, Afrobeats "
-        "and these songs specifically: [{'title': 'Tum Hi Ho', 'artist': 'Arijit Singh'}, "
-        "{'title': 'Ye', 'artist': 'Burna Boy'}]."
+        "Just create a mix between i ain't worried, Closer."
     )
     # Execute the pipeline with the sample user input.
     run_pipeline(user_input)

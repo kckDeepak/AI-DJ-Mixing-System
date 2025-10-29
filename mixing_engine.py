@@ -1,14 +1,15 @@
 # generate_mix.py
 """
 This module generates a continuous DJ mix by applying transitions between tracks based on an analyzed setlist and a mixing plan.
-It uses audio processing techniques to align tracks, apply tempo adjustments, and create smooth transitions (e.g., crossfades, EQ sweeps).
+It uses audio processing techniques to align tracks, apply tempo adjustments, and create smooth transitions (e.g., crossfades, EQ sweeps, Chorus Beatmatch).
 The resulting mix is normalized and exported as an MP3 file.
 
 Key features:
 - Converts audio between pydub's AudioSegment and NumPy arrays for processing.
 - Aligns tracks using onset strength correlation for beat matching.
-- Supports multiple transition types (e.g., crossfade, EQ sweep, echo-drop, reverb) with customizable parameters.
+- Supports multiple transition types (e.g., crossfade, EQ sweep, echo-drop, reverb, Chorus Beatmatch) with customizable parameters.
 - Applies tempo stretching based on OTAC (Optimal Tempo Adjustment Coefficient) from the mixing plan.
+- Handles mid-song cuts for Chorus Beatmatch transitions and adjusts alignments accordingly.
 - Handles missing files gracefully and normalizes the final mix for consistent loudness.
 
 Dependencies:
@@ -175,6 +176,7 @@ def apply_transition(segment1: AudioSegment,
     Supported transition types:
     - Crossfade: Fades out the first segment and fades in the second over the overlap duration.
     - EQ Sweep: Applies high-pass to outgoing and low-pass to incoming, with beat alignment.
+    - Chorus Beatmatch: Crossfade with beat alignment lag adjustment at chorus end (no filters).
     - Echo-Drop: Reduces outgoing volume and crossfades with incoming.
     - Fade Out/Fade In: Sequential fade-out and fade-in without overlap.
     - Build Drop: Overlays segments without fading.
@@ -184,7 +186,7 @@ def apply_transition(segment1: AudioSegment,
     - Default: Appends segments without transition.
 
     Args:
-        segment1 (AudioSegment): Outgoing audio segment.
+        segment1 (AudioSegment): Outgoing audio segment (tail/overlap portion).
         segment2 (AudioSegment): Incoming audio segment.
         transition_type (str): Type of transition to apply.
         duration_ms (int, optional): Base transition duration in milliseconds. Defaults to 8000.
@@ -219,14 +221,53 @@ def apply_transition(segment1: AudioSegment,
         overlap = int(min(len(segment1), len(segment2_stretched), duration_ms + early_ms))
         overlap = max(500, overlap)
 
-        if transition_type.lower() in ("crossfade", "cross fade"):
+        t_type = transition_type.lower()
+
+        if t_type in ("crossfade", "cross fade"):
             # Crossfade: Fade out the outgoing segment and fade in the incoming segment.
             out_tail = segment1[-overlap:].fade_out(overlap)
             in_head = segment2_stretched[:overlap].fade_in(overlap)
             cross = out_tail.overlay(in_head)  # Combine faded segments.
             return segment1[:-overlap] + cross + segment2_stretched[overlap:]
 
-        elif transition_type.lower() in ("eq sweep", "eq", "eq_sweep"):
+        elif t_type in ("chorus beatmatch", ):
+            # Chorus Beatmatch: Crossfade with beat alignment lag adjustment (no filters).
+            eq_overlap = overlap  # Use crossfade overlap for chorus transitions.
+            y1_full, sr_full = audio_segment_to_np(segment1)
+            y2_full, _ = audio_segment_to_np(segment2_stretched)
+            match_sec = eq_overlap / float(sr_full)
+            lag_seconds = find_best_alignment(y1_full, sr_full, y2_full, sr_full, match_duration_sec=match_sec)
+            lag_ms = int(lag_seconds * 1000.0)
+            # Prepare faded segments.
+            outgoing_tail = segment1[-eq_overlap:]
+            outgoing_faded = outgoing_tail.fade_out(eq_overlap)
+            head_for_align = segment2_stretched[:eq_overlap]
+            incoming_faded = head_for_align.fade_in(eq_overlap)
+            if lag_ms > 0:
+                # Delay incoming: overlay incoming_faded at position lag_ms on outgoing_faded.
+                mixed = outgoing_faded.overlay(incoming_faded, position=lag_ms)
+                tail_rest = segment2_stretched[eq_overlap:]
+            elif lag_ms < 0:
+                # Advance incoming.
+                advance_ms = -lag_ms
+                pre_head = segment2_stretched[:advance_ms]
+                overlay_head = segment2_stretched[advance_ms : advance_ms + eq_overlap]
+                overlay_faded = overlay_head.fade_in(eq_overlap)
+                mixed = outgoing_faded.overlay(overlay_faded)
+                incoming_head_faded = pre_head + mixed
+                tail_rest = segment2_stretched[advance_ms + eq_overlap:]
+            else:
+                # No lag: direct overlay.
+                mixed = outgoing_faded.overlay(incoming_faded)
+                tail_rest = segment2_stretched[eq_overlap:]
+            # Pre-tail (empty if segment1 is exactly overlap).
+            pre_tail = segment1[:-eq_overlap] if len(segment1) > eq_overlap else AudioSegment.empty()
+            if lag_ms < 0:
+                return pre_tail + incoming_head_faded + tail_rest
+            else:
+                return pre_tail + mixed + tail_rest
+
+        elif t_type in ("eq sweep", "eq", "eq_sweep"):
             # EQ Sweep: Apply high-pass to outgoing and low-pass to incoming with beat alignment.
             eq_overlap = int(min(eq_match_duration_ms, len(segment1), len(segment2_stretched)))
             eq_overlap = max(2000, eq_overlap)  # Ensure minimum overlap of 2 seconds.
@@ -240,67 +281,70 @@ def apply_transition(segment1: AudioSegment,
             outgoing_tail = segment1[-eq_overlap:]
             outgoing_hp = high_pass_filter(outgoing_tail, cutoff=200)  # High-pass filter outgoing audio.
             outgoing_faded = outgoing_hp.fade_out(eq_overlap)  # Fade out the filtered audio.
-            head_for_filter = segment2_stretched[:eq_overlap]
-            incoming_lp = low_pass_filter(head_for_filter, cutoff=6000)  # Low-pass filter incoming audio.
-            incoming_faded = incoming_lp.fade_in(eq_overlap)  # Fade in the filtered audio.
-
             if lag_ms > 0:
-                # Delay incoming track: Prepend silence to align.
-                silence = AudioSegment.silent(duration=lag_ms)
-                incoming_head_faded = silence + incoming_faded
-                mixed = outgoing_faded.overlay(incoming_head_faded)
-                tail = segment2_stretched[eq_overlap:]
+                # Delay incoming: overlay incoming_faded at position lag_ms on outgoing_faded.
+                head_for_filter = segment2_stretched[:eq_overlap]
+                incoming_lp = low_pass_filter(head_for_filter, cutoff=6000)  # Low-pass filter incoming audio.
+                incoming_faded = incoming_lp.fade_in(eq_overlap)
+                mixed = outgoing_faded.overlay(incoming_faded, position=lag_ms)
+                tail_rest = segment2_stretched[eq_overlap:]
             elif lag_ms < 0:
-                # Advance incoming track: Prepend earlier portion and align overlap.
+                # Advance incoming.
                 advance_ms = -lag_ms
                 pre_head = low_pass_filter(segment2_stretched[:advance_ms], cutoff=6000)
                 overlay_head = low_pass_filter(segment2_stretched[advance_ms : advance_ms + eq_overlap], cutoff=6000)
                 overlay_faded = overlay_head.fade_in(eq_overlap)
-                mixed = outgoing_faded.overlay(overlay_faded, position=0)
+                mixed = outgoing_faded.overlay(overlay_faded)
                 incoming_head_faded = pre_head + mixed
-                tail = segment2_stretched[advance_ms + eq_overlap:]
+                tail_rest = segment2_stretched[advance_ms + eq_overlap:]
             else:
-                # No lag: Directly overlay faded segments.
-                incoming_head_faded = incoming_faded
-                mixed = outgoing_faded.overlay(incoming_head_faded)
-                tail = segment2_stretched[eq_overlap:]
+                # No lag: direct overlay.
+                head_for_filter = segment2_stretched[:eq_overlap]
+                incoming_lp = low_pass_filter(head_for_filter, cutoff=6000)
+                incoming_faded = incoming_lp.fade_in(eq_overlap)
+                mixed = outgoing_faded.overlay(incoming_faded)
+                tail_rest = segment2_stretched[eq_overlap:]
+            # Pre-tail (empty if segment1 is exactly overlap).
+            pre_tail = segment1[:-eq_overlap] if len(segment1) > eq_overlap else AudioSegment.empty()
+            if lag_ms < 0:
+                return pre_tail + incoming_head_faded + tail_rest
+            else:
+                return pre_tail + mixed + tail_rest
 
-            return segment1[:-eq_overlap] + mixed + tail
-
-        elif transition_type.lower() in ("echo-drop", "echo drop"):
+        elif t_type in ("echo-drop", "echo drop"):
             # Echo-Drop: Reduce outgoing volume and crossfade with incoming.
             overlap = int(min(duration_ms, len(segment1), len(segment2_stretched)))
             echo = (segment1[-overlap:] - 10).fade_out(int(overlap * 0.6))  # Lower volume and fade out.
             incoming = segment2_stretched[:overlap].fade_in(int(overlap * 0.6))  # Fade in incoming.
             return segment1[:-overlap] + echo.overlay(incoming) + segment2_stretched[overlap:]
 
-        elif transition_type.lower() in ("fade out/fade in", "fade out", "fade in", "fade_in"):
+        elif t_type in ("fade out/fade in", "fade out", "fade in", "fade_in"):
             # Fade Out/Fade In: Sequential fade-out and fade-in without overlap.
             overlap = int(min(duration_ms, len(segment1), len(segment2_stretched)))
             fade_out = segment1[-overlap:].fade_out(overlap)
             fade_in = segment2_stretched[:overlap].fade_in(overlap)
             return segment1[:-overlap] + fade_out + fade_in + segment2_stretched[overlap:]
 
-        elif transition_type.lower() == "build_drop":
+        elif t_type == "build_drop":
             # Build Drop: Overlay segments without fading for a dramatic effect.
             overlap = int(min(duration_ms, len(segment1), len(segment2_stretched)))
             mixed_overlap = segment1[-overlap:].overlay(segment2_stretched[:overlap])
             return segment1[:-overlap] + mixed_overlap + segment2_stretched[overlap:]
 
-        elif transition_type.lower() == "loop":
+        elif t_type == "loop":
             # Loop: Repeat a portion of the outgoing segment before appending the incoming.
             beat_len_ms = 2000  # Default loop duration (2 seconds).
             loop_end = min(beat_len_ms, len(segment1))
             loop_seg = segment1[-loop_end:] + segment1[-loop_end:]  # Repeat the last portion.
             return loop_seg + segment2_stretched
 
-        elif transition_type.lower() == "backspin":
+        elif t_type == "backspin":
             # Backspin: Reverse a portion of the outgoing segment for a DJ rewind effect.
             rewind_len_ms = int(min(4000, len(segment1)))  # Default rewind duration (4 seconds).
             rewind = segment1[-rewind_len_ms:].reverse().fade_out(1000)  # Reverse and fade out.
             return rewind + segment2_stretched
 
-        elif transition_type.lower() == "reverb":
+        elif t_type == "reverb":
             # Reverb: Simulate reverb by overlaying delayed copies of both segments.
             overlap = int(min(duration_ms, len(segment1), len(segment2_stretched)))
             delay_ms = 100  # Short delay for reverb effect.
@@ -330,7 +374,8 @@ def generate_mix(analyzed_setlist_json, mixing_plan_json, first_fade_in_ms=5000,
 
     Process:
     - Loads the analyzed setlist and mixing plan JSON files.
-    - Iterates through tracks, applying transitions as specified in the mixing plan.
+    - Iterates through tracks, trimming outgoing tracks at cut points (e.g., chorus ends) and applying transitions.
+    - Uses beat alignment for Chorus Beatmatch and EQ Sweep transitions.
     - Handles missing files by skipping them and logging errors.
     - Applies a fade-in to the first track and normalizes the final mix for consistent loudness.
     - Exports the mix as an MP3 file ('mix.mp3').
@@ -352,6 +397,7 @@ def generate_mix(analyzed_setlist_json, mixing_plan_json, first_fade_in_ms=5000,
         mixing_plan = json.load(open(mixing_plan_json, 'r')).get("mixing_plan", [])
         full_mix = AudioSegment.empty()  # Initialize an empty AudioSegment for the mix.
         track_index = 0  # Track index to align with mixing plan entries.
+        last_track_start_mix_sec = None  # Track the mix start time (seconds) of the last added track.
 
         # Iterate over each time segment in the analyzed setlist.
         for segment in analyzed_data.get("analyzed_setlist", []):
@@ -359,6 +405,22 @@ def generate_mix(analyzed_setlist_json, mixing_plan_json, first_fade_in_ms=5000,
 
             # Process each track in the segment.
             for track in tracks:
+                if track_index >= len(mixing_plan):
+                    # If mixing plan is exhausted, append remaining tracks fully.
+                    file_path = os.path.join(SONGS_DIR, track["file"])
+                    if os.path.exists(file_path):
+                        audio = AudioSegment.from_file(file_path)
+                        full_mix += audio
+                    track_index += 1
+                    continue
+
+                plan_entry = mixing_plan[track_index]
+                transition_type = plan_entry.get("transition_type", "Crossfade")  # Default to Crossfade.
+                otac = plan_entry.get("otac", 0.0)  # Get OTAC for tempo adjustment.
+                outgoing_cut_sec = plan_entry.get("outgoing_cut_sec")  # Cut point in previous track (seconds).
+                overlap_sec = plan_entry.get("overlap_sec", 8.0)  # Overlap duration (seconds).
+                overlap_ms = int(overlap_sec * 1000 + 0.5)  # Convert to milliseconds.
+
                 file_path = os.path.join(SONGS_DIR, track["file"])  # Construct full file path.
                 if not os.path.exists(file_path):
                     # Log missing file and skip the track.
@@ -368,37 +430,35 @@ def generate_mix(analyzed_setlist_json, mixing_plan_json, first_fade_in_ms=5000,
 
                 # Load the audio file.
                 audio = AudioSegment.from_file(file_path)
-                if track_index >= len(mixing_plan):
-                    # If mixing plan is too short, append the track without transition.
-                    print(f"[generate_mix] Mixing plan too short, appending track {track['title']}.")
-                    full_mix += audio
-                    track_index += 1
-                    continue
 
-                # Get the corresponding mixing plan entry.
-                plan_entry = mixing_plan[track_index]
-                transition_type = plan_entry.get("transition_type", "Crossfade")  # Default to Crossfade.
-                otac = plan_entry.get("otac", 0.0)  # Get OTAC for tempo adjustment.
-
-                if len(full_mix) == 0:
-                    # First track: Apply fade-in.
+                if track_index == 0:
+                    # First track: Apply fade-in (no trim or transition).
                     fade_dur = int(min(first_fade_in_ms, len(audio)))
                     full_mix += audio.fade_in(fade_dur)
+                    last_track_start_mix_sec = 0.0
                 else:
-                    # Subsequent tracks: Apply transition.
-                    desired_overlap_ms = max(eq_match_ms if "eq" in transition_type.lower() else 8000, 8000)
-                    available = len(full_mix)
-                    overlap_chunk_ms = int(min(available, desired_overlap_ms))  # Determine overlap duration.
-                    if overlap_chunk_ms < 1000:
-                        overlap_chunk_ms = int(min(5000, available))  # Use minimum overlap if too short.
-                    tail_chunk = full_mix[-overlap_chunk_ms:]  # Extract tail of current mix.
-                    # Apply the specified transition.
-                    trans_audio = apply_transition(tail_chunk, audio, transition_type,
-                                                  duration_ms=8000,
-                                                  early_ms=crossfade_early_ms,
-                                                  otac=otac,
-                                                  eq_match_duration_ms=eq_match_ms)
-                    full_mix = full_mix[:-overlap_chunk_ms] + trans_audio  # Replace tail with transitioned audio.
+                    # Subsequent tracks: Trim previous to outgoing cut, then apply transition.
+                    trans_start_mix_sec = last_track_start_mix_sec + outgoing_cut_sec
+                    trans_start_ms = int(trans_start_mix_sec * 1000 + 0.5)
+                    # Trim full_mix to the transition start point.
+                    if len(full_mix) > trans_start_ms:
+                        full_mix = full_mix[:trans_start_ms]
+                    # Calculate tail start for overlap.
+                    tail_start_ms = max(0, trans_start_ms - overlap_ms)
+                    pre_transition = full_mix[:tail_start_ms] if tail_start_ms > 0 else AudioSegment.empty()
+                    tail = full_mix[tail_start_ms:]
+                    # Apply the specified transition (tail is the overlap portion).
+                    trans_audio = apply_transition(
+                        tail, audio, transition_type,
+                        duration_ms=8000,
+                        early_ms=crossfade_early_ms,
+                        otac=otac,
+                        eq_match_duration_ms=eq_match_ms
+                    )
+                    # Rebuild full_mix with pre + transitioned audio.
+                    full_mix = pre_transition + trans_audio
+                    # Update last start time for this track.
+                    last_track_start_mix_sec = trans_start_mix_sec - overlap_sec
 
                 track_index += 1
 
@@ -443,6 +503,7 @@ if __name__ == "__main__":
                         "danceability": 0.52,
                         "has_vocals": true,
                         "segments": [{"label": "L"}],
+                        "choruses": [],
                         "chroma_matrix": null,
                         "transition": "Fade In",
                         "notes": "Balanced Vibe track. Genre: bollywood."
@@ -460,6 +521,7 @@ if __name__ == "__main__":
                         "danceability": 0.8,
                         "has_vocals": true,
                         "segments": [{"label": "H"}],
+                        "choruses": [],
                         "chroma_matrix": null,
                         "transition": "Crossfade",
                         "notes": "Dance Floor Filler track. Genre: r&b."

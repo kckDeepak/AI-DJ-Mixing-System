@@ -1,14 +1,15 @@
 # track_analysis_engine.py
 """
 This module implements a track analysis engine that processes MP3 files from a setlist to extract comprehensive audio
-features using the Librosa library. It analyzes tracks for tempo, key, energy, valence, danceability, and structural
-segments, and enhances a setlist with these features, vibe labels, and transition suggestions. The output is saved as a
-JSON file for use in DJ or event planning applications.
+features using the Librosa library. It analyzes tracks for tempo, key, energy, valence, danceability, structural
+segments (including chorus detection), and enhances a setlist with these features, vibe labels, and transition suggestions.
+The output is saved as a JSON file for use in DJ or event planning applications.
 
 Key features:
 - Extracts audio features such as BPM, key, energy, valence, danceability, and structural segments.
 - Uses Krumhansl-Kessler profiles for key estimation and heuristic-based vocal detection.
 - Applies beat tracking and optional machine learning for downbeat detection (with fallback logic).
+- Detects chorus sections using self-similarity analysis on chroma features to identify repeated high-energy segments.
 - Suggests DJ transitions between tracks based on BPM and energy differences.
 - Sorts tracks within setlist segments by BPM for smoother transitions.
 
@@ -158,6 +159,95 @@ def _detect_downbeats(y, sr, beats):
     else:
         downbeats = np.array([0])  # Default to time 0 if no beats.
     return librosa.frames_to_time(downbeats, sr=sr)
+
+
+def _detect_choruses(y, sr, segments):
+    """
+    Detects chorus sections in an audio track using self-similarity analysis on chroma features.
+
+    Process:
+    - Computes a recurrence matrix (self-similarity) from the chroma STFT to identify repeated patterns.
+    - Binarizes the affinity matrix using a median threshold for pattern detection.
+    - Considers all segments (prioritizing 'High' energy) as chorus candidates to increase detection rate.
+    - Identifies repeated segments as choruses by thresholding the recurrence matrix (lowered threshold for sensitivity).
+    - If no strong repetitions found, falls back to labeling the longest high-energy segment as a chorus for practicality.
+    - Returns chorus segments with start/end times; falls back to no choruses if detection fails.
+
+    Args:
+        y (np.ndarray): Audio time series.
+        sr (int): Sampling rate of the audio.
+        segments (list): Pre-computed structural segments with 'start', 'end', and 'label' keys.
+
+    Returns:
+        list: List of dictionaries with keys 'start' (float), 'end' (float), and 'label' ('Chorus').
+              Returns an empty list if no choruses are detected.
+    """
+    try:
+        # Compute chroma STFT for harmonic content similarity.
+        chroma = chroma_stft(y=y, sr=sr)
+        
+        # Compute recurrence matrix (self-similarity) as affinity (no binary arg in this librosa version).
+        R = librosa.segment.recurrence_matrix(chroma, mode='affinity', metric='cosine')
+        
+        # Binarize the affinity matrix using median threshold for pattern detection.
+        threshold = np.median(R)
+        R_binary = (R > threshold).astype(float)
+        
+        # Get time indices aligned with chroma frames.
+        times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sr)
+        
+        # Use all segments for candidates, prioritizing 'High' energy to increase detection.
+        all_segments = segments if segments else [{'start': 0.0, 'end': len(y)/sr, 'label': 'Full Track'}]
+        high_energy_segments = [seg for seg in all_segments if seg['label'] == 'High']
+        candidate_segments = high_energy_segments if high_energy_segments else all_segments
+        
+        if not candidate_segments:
+            print("No segments available for chorus detection.")
+            return []  # No segments; no chorus detected.
+        
+        chorus_candidates = []
+        # For each candidate segment, compute average recurrence (repetition strength) using binary matrix.
+        for seg in candidate_segments:
+            start_idx = np.argmin(np.abs(times - seg['start']))
+            end_idx = np.argmin(np.abs(times - seg['end']))
+            if end_idx > start_idx:
+                seg_recurrence = np.mean(R_binary[start_idx:end_idx, :])  # Mean similarity to entire track.
+            else:
+                seg_recurrence = 0.0
+            
+            # Very low threshold for high sensitivity (from 0.15 to 0.05).
+            if seg_recurrence > 0.05:
+                chorus_candidates.append((seg, seg_recurrence))
+        
+        # Select candidates with highest recurrence (top 3 for more options).
+        if chorus_candidates:
+            chorus_candidates.sort(key=lambda x: x[1], reverse=True)
+            choruses = [{'start': c[0]['start'], 'end': c[0]['end'], 'label': 'Chorus'} for c in chorus_candidates[:3]]
+            print(f"Detected {len(choruses)} chorus(es) with strengths: {[round(c[1], 3) for c in chorus_candidates[:3]]}")
+            return choruses
+        else:
+            # Fallback: Label the longest high-energy segment (or first if none) as chorus.
+            if high_energy_segments:
+                longest_seg = max(high_energy_segments, key=lambda s: s['end'] - s['start'])
+                fallback_chorus = [{'start': longest_seg['start'], 'end': longest_seg['end'], 'label': 'Chorus (Fallback)'}]
+                print("No repetition-based choruses; using fallback to longest high-energy segment.")
+                return fallback_chorus
+            else:
+                # Ultimate fallback: Midpoint of the track as a chorus segment (e.g., 30% to 60% duration).
+                duration = len(y) / sr
+                fallback_start = duration * 0.3
+                fallback_end = duration * 0.6
+                fallback_chorus = [{'start': fallback_start, 'end': fallback_end, 'label': 'Chorus (Mid-Track Fallback)'}]
+                print("No high-energy segments; using mid-track fallback for chorus.")
+                return fallback_chorus
+
+    except Exception as e:
+        # Log error and return a fallback mid-track chorus.
+        print(f"Chorus detection failed: {e}. Using mid-track fallback.")
+        duration = len(y) / sr
+        fallback_start = duration * 0.3
+        fallback_end = duration * 0.6
+        return [{'start': fallback_start, 'end': fallback_end, 'label': 'Chorus (Error Fallback)'}]
 
 
 def _structural_segmentation(y, sr):
@@ -350,7 +440,7 @@ def analyze_track(title, artist, filename):
     - Tempo (BPM), beat positions, downbeats.
     - Key, scale, and semitone index.
     - Energy, valence, danceability (heuristic approximations).
-    - Structural segments with energy labels.
+    - Structural segments with energy labels and chorus detection.
     - Similarity features (energy, centroid, rolloff, zero-crossing rate).
     - Chroma matrix (for harmonic content).
     - Vocal presence (heuristic).
@@ -374,7 +464,7 @@ def analyze_track(title, artist, filename):
             "title": title, "artist": artist, "file": filename, 
             "bpm": 0, "key": "N/A", "key_semitone": 0, "scale": "N/A", 
             "energy": 0.0, "valence": 0.0, "danceability": 0.0,
-            "beat_positions": [], "downbeats": [], "segments": [],
+            "beat_positions": [], "downbeats": [], "segments": [], "choruses": [],
             "similarity_features": [0.0] * 4, "chroma_matrix": None, "has_vocals": False, 
             "theme_vector": [0.0] * 5, "genre": "File Missing"
         }
@@ -406,6 +496,7 @@ def analyze_track(title, artist, filename):
 
         # Extract advanced structural and similarity features.
         segments = _structural_segmentation(y, sr)  # Segment track and label energy.
+        choruses = _detect_choruses(y, sr, segments)  # Detect chorus sections within segments.
         similarity_features = _extract_similarity_features(y, sr)  # Features for track similarity.
         has_vocals = _detect_vocals(y, sr)  # Detect vocal presence.
         theme_vector = _compute_theme_descriptor(y, sr)  # Compact theme vector.
@@ -417,6 +508,7 @@ def analyze_track(title, artist, filename):
             "key": key_name, "key_semitone": key_semitone, "scale": scale, "genre": "Unknown",
             "energy": energy, "valence": valence, "danceability": danceability,
             "segments": segments,
+            "choruses": choruses,
             "similarity_features": similarity_features.tolist(),
             "chroma_matrix": chroma_mat.tolist(),  # Full chroma matrix (large).
             "has_vocals": bool(has_vocals),
@@ -430,7 +522,7 @@ def analyze_track(title, artist, filename):
             "title": title, "artist": artist, "file": filename, 
             "bpm": 120, "key": "C", "key_semitone": 0, "scale": "major", 
             "energy": 0.5, "valence": 0.5, "danceability": 0.5,
-            "beat_positions": [], "downbeats": [], "segments": [],
+            "beat_positions": [], "downbeats": [], "segments": [], "choruses": [],
             "similarity_features": [0.5, 2000, 4000, 0.1], "chroma_matrix": None, "has_vocals": False, 
             "theme_vector": [0.5] * 5, "genre": "Analysis Failed"
         }
@@ -628,7 +720,6 @@ def analyze_tracks_in_setlist(setlist_json):
         # Log any errors during analysis and re-raise for caller handling.
         print(f"Error in Track Analysis Engine: {str(e)}")
         raise
-
 
 if __name__ == "__main__":
     """

@@ -1,16 +1,17 @@
 # generate_mixing_plan.py
 """
 This module generates a DJ mixing plan based on an analyzed setlist, producing a sequence of track transitions with
-timing, transition types, and tempo adjustments. It uses audio metadata (e.g., BPM, key, vocals) to suggest optimal
+timing, transition types, and tempo adjustments. It uses audio metadata (e.g., BPM, key, vocals, choruses) to suggest optimal
 transition types and calculates start times and overlaps for a seamless mix. The output is saved as a JSON file for use
 in DJ software or event planning.
 
 Key features:
-- Estimates transition overlaps based on transition type (e.g., crossfade, EQ sweep).
+- Estimates transition overlaps based on transition type (e.g., crossfade, EQ sweep, Chorus Beatmatch).
 - Checks harmonic compatibility between tracks using key semitone differences.
 - Computes OTAC (Optimal Tempo Adjustment Coefficient) for smooth tempo transitions.
-- Suggests transition types based on BPM, key compatibility, and vocal presence.
-- Generates a mixing plan with start times, transition points, and comments for each track.
+- Suggests transition types based on BPM, key compatibility, vocal presence, and chorus availability for mid-song transitions.
+- Supports "Chorus Beatmatch" transitions at the end of the outgoing track's chorus if beats align (BPM diff <= 2).
+- Generates a mixing plan with start times, transition points, cut offsets, and comments for each track.
 
 Dependencies:
 - json: For parsing input setlist and serializing the mixing plan.
@@ -40,10 +41,11 @@ def get_estimated_overlap(transition_type: str, crossfade_early_ms: int = 5500, 
     Transition types and overlaps:
     - Fade In: No overlap (0.0 seconds).
     - EQ Sweep: Uses eq_match_ms (default 15 seconds) for longer transitions.
+    - Chorus Beatmatch: Same as Crossfade (default 13.5 seconds).
     - Other transitions (e.g., Crossfade): Uses crossfade_early_ms + duration_ms (default 13.5 seconds).
 
     Args:
-        transition_type (str): Type of transition (e.g., 'Fade In', 'Crossfade', 'EQ Sweep').
+        transition_type (str): Type of transition (e.g., 'Fade In', 'Crossfade', 'EQ Sweep', 'Chorus Beatmatch').
         crossfade_early_ms (int, optional): Early crossfade duration in milliseconds. Defaults to 5500.
         duration_ms (int, optional): Base crossfade duration in milliseconds. Defaults to 8000.
         eq_match_ms (int, optional): EQ sweep transition duration in milliseconds. Defaults to 15000.
@@ -56,6 +58,8 @@ def get_estimated_overlap(transition_type: str, crossfade_early_ms: int = 5500, 
         return 0.0  # No overlap for fade-in transitions (first track).
     elif "eq" in t:
         return eq_match_ms / 1000.0  # Convert EQ sweep duration to seconds.
+    elif "chorus" in t:
+        return (duration_ms + crossfade_early_ms) / 1000.0  # Same as crossfade for chorus transitions.
     else:
         return (duration_ms + crossfade_early_ms) / 1000.0  # Sum crossfade durations and convert to seconds.
 
@@ -120,26 +124,31 @@ def compute_otac(song1_data, song2_data):
 # ---------------------------
 def suggest_transition_type(from_track, to_track):
     """
-    Suggests a transition type for moving from one track to another based on BPM difference, key compatibility, and vocal presence.
+    Suggests a transition type for moving from one track to another based on BPM difference, key compatibility, vocal presence, and chorus availability.
 
     Transition logic:
-    - Crossfade: Used for small BPM differences (≤ 3), compatible keys, and no vocals in both tracks, or if both tracks have vocals.
-    - EQ Sweep: Used for moderate BPM differences (≤ 6) with incompatible keys.
+    - Chorus Beatmatch: BPM difference ≤ 2, both tracks have choruses (for mid-song beat-aligned transitions).
+    - Crossfade: Small BPM differences (≤ 3), compatible keys, no vocals in both tracks, or both have vocals.
+    - EQ Sweep: Moderate BPM differences (≤ 6) with incompatible keys.
     - Crossfade (default): Used in all other cases for simplicity and safety.
 
     Args:
-        from_track (dict): Metadata of the first track (bpm, key_semitone, has_vocals).
-        to_track (dict): Metadata of the second track (bpm, key_semitone, has_vocals).
+        from_track (dict): Metadata of the first track (bpm, key_semitone, has_vocals, choruses).
+        to_track (dict): Metadata of the second track (bpm, key_semitone, has_vocals, choruses).
 
     Returns:
-        str: Suggested transition type ('Crossfade', 'EQ Sweep').
+        str: Suggested transition type ('Crossfade', 'EQ Sweep', 'Chorus Beatmatch').
     """
-    tempo_diff = abs(float(from_track.get('bpm', 0)) - float(to_track.get('bpm', 0)))  # Compute BPM difference.
+    bpm_diff = abs(float(from_track.get('bpm', 0)) - float(to_track.get('bpm', 0)))  # Compute BPM difference.
+    has_choruses_from = bool(from_track.get('choruses', []))  # Check if outgoing track has choruses.
+    has_choruses_to = bool(to_track.get('choruses', []))  # Check if incoming track has choruses.
+    if bpm_diff <= 2 and has_choruses_from and has_choruses_to:
+        return "Chorus Beatmatch"  # Use chorus transition if BPMs align closely and choruses available.
     key_compatible = is_harmonic_key(from_track.get('key_semitone'), to_track.get('key_semitone'))  # Check key compatibility.
     has_vocals = from_track.get('has_vocals', False) and to_track.get('has_vocals', False)  # Check if both tracks have vocals.
-    if tempo_diff <= 3 and key_compatible and not has_vocals:
+    if bpm_diff <= 3 and key_compatible and not has_vocals:
         return "Crossfade"  # Smooth transition for similar tempos and compatible keys without vocals.
-    if tempo_diff <= 6 and not key_compatible:
+    if bpm_diff <= 6 and not key_compatible:
         return "EQ Sweep"  # Use EQ sweep for moderate tempo differences with incompatible keys.
     if has_vocals:
         return "Crossfade"  # Prefer crossfade when both tracks have vocals to avoid clashing.
@@ -147,16 +156,34 @@ def suggest_transition_type(from_track, to_track):
 
 
 # ---------------------------
+# Time formatting helper
+# ---------------------------
+def format_time(seconds: float) -> str:
+    """
+    Formats seconds into HH:MM:SS string.
+
+    Args:
+        seconds (float): Time in seconds.
+
+    Returns:
+        str: Formatted time string (e.g., '00:01:23').
+    """
+    delta = timedelta(seconds=seconds)
+    return (datetime.min + delta).strftime("%H:%M:%S")
+
+
+# ---------------------------
 # Mixing plan generator
 # ---------------------------
 def generate_mixing_plan(analyzed_setlist_json, first_fade_in_ms=5000, crossfade_early_ms=5500, eq_match_ms=15000):
     """
-    Generates a DJ mixing plan from an analyzed setlist, including start times, transition types, and OTAC values.
+    Generates a DJ mixing plan from an analyzed setlist, including start times, transition types, cut offsets, and OTAC values.
 
     Process:
     - Parses the input setlist JSON.
-    - For each track, loads the audio to determine duration and calculates start times considering overlaps.
-    - Suggests transition types and OTAC values for smooth transitions.
+    - For each track, loads the audio to determine duration and calculates start times considering overlaps and cuts.
+    - Suggests transition types, including "Chorus Beatmatch" for mid-song transitions at chorus ends.
+    - Adjusts outgoing cut points for chorus transitions and computes aligned start times.
     - Handles missing files by using a fallback duration and skipping problematic tracks.
     - Saves the mixing plan as a JSON file ('mixing_plan.json').
 
@@ -173,8 +200,9 @@ def generate_mixing_plan(analyzed_setlist_json, first_fade_in_ms=5000, crossfade
         # Parse the input analyzed setlist JSON into a Python dictionary.
         analyzed_data = json.loads(analyzed_setlist_json)
         mixing_plan = []  # Initialize list to store mixing plan entries.
-        current_mix_length_sec = 0.0  # Track cumulative mix duration in seconds.
-        last_track = None  # Track the previous track for transition calculations.
+        last_track_meta = None  # Track the previous track metadata for transition calculations.
+        last_start_sec = None  # Track the start time of the last track in mix seconds.
+        last_full_duration_sec = 0.0  # Track the full duration of the last track.
 
         # Iterate over each time segment in the analyzed setlist.
         for segment in analyzed_data.get("analyzed_setlist", []):
@@ -186,43 +214,74 @@ def generate_mixing_plan(analyzed_setlist_json, first_fade_in_ms=5000, crossfade
                 if not os.path.exists(file_path):
                     # Log missing file and use fallback duration (180 seconds).
                     print(f"[generate_mixing_plan] Missing file: {file_path}. Skipping track.")
-                    duration_sec = 180.0  # Fallback duration for missing files.
-                    # Calculate overlap based on default transition type (Crossfade) if not the first track.
-                    est_overlap_sec = get_estimated_overlap("Crossfade", crossfade_early_ms, 8000, eq_match_ms) if last_track else 0.0
-                    start_sec = current_mix_length_sec  # Current mix time as start time.
-                    start_delta = timedelta(seconds=start_sec)  # Convert to timedelta for formatting.
-                    start_str = (datetime.min + start_delta).strftime("%H:%M:%S")  # Format as HH:MM:SS.
-                    # Skip adding to mixing plan to avoid invalid entries.
-                    current_mix_length_sec += duration_sec - est_overlap_sec  # Update mix duration.
-                    continue
+                    # For missing files, assume full play and default transition (no cut).
+                    if last_track_meta is not None:
+                        overlap_sec = get_estimated_overlap("Crossfade", crossfade_early_ms, 8000, eq_match_ms)
+                        start_sec = last_start_sec + last_full_duration_sec - overlap_sec
+                        mixing_plan.append({
+                            "from_track": last_track_meta.get("title"),
+                            "to_track": track.get("title"),
+                            "start_time": format_time(start_sec),
+                            "transition_point": "end of track",
+                            "transition_type": "Crossfade",
+                            "outgoing_cut_sec": last_full_duration_sec,
+                            "overlap_sec": overlap_sec,
+                            "otac": 0.0,
+                            "comment": f"Transition {last_track_meta.get('title')} -> {track.get('title')}. Missing file fallback."
+                        })
+                        last_start_sec = start_sec
+                    continue  # Skip adding duration update for missing.
 
                 # Load audio file to determine its duration.
                 audio = AudioSegment.from_file(file_path)
                 duration_sec = len(audio) / 1000.0  # Convert duration to seconds.
 
-                if last_track is None:
+                if last_track_meta is None:
                     # First track uses a fade-in transition.
+                    start_sec = 0.0
                     transition_type = "Fade In"
-                    comment = f"Start {track.get('notes','').split('.')[0].lower()} section."  # Descriptive comment.
-                    from_track_title = None  # No previous track.
-                    otac_val = 0.0  # No tempo adjustment for the first track.
-                    transition_point = "downbeat align"  # Align with downbeat for the start.
-                    est_overlap_sec = 0.0  # No overlap for fade-in.
+                    outgoing_cut_sec = None  # No outgoing for first track.
+                    overlap_sec = 0.0
+                    from_track_title = None
+                    otac_val = 0.0
+                    transition_point = "downbeat align"
+                    comment = f"Start {track.get('notes','').split('.')[0].lower()} section."
                 else:
                     # Suggest transition type based on track metadata.
-                    transition_type = suggest_transition_type(last_track, track)
-                    otac_val = compute_otac(last_track, track)  # Compute OTAC for tempo adjustment.
-                    # Create a descriptive comment for the transition.
-                    comment = f"Transition {last_track.get('title')} -> {track.get('title')}. Suggested '{transition_type}'."
-                    from_track_title = last_track.get('title')  # Previous track title.
-                    transition_point = "beat grid match"  # Align transitions with beat grids.
-                    # Calculate overlap duration based on transition type.
-                    est_overlap_sec = get_estimated_overlap(transition_type, crossfade_early_ms, 8000, eq_match_ms)
+                    transition_type = suggest_transition_type(last_track_meta, track)
+                    otac_val = compute_otac(last_track_meta, track)
+                    overlap_sec = get_estimated_overlap(transition_type, crossfade_early_ms, 8000, eq_match_ms)
+                    if transition_type == "Chorus Beatmatch":
+                        # Use end of last chorus as cut point.
+                        choruses = last_track_meta.get("choruses", [])
+                        if choruses:
+                            outgoing_cut_sec = choruses[-1]["end"]
+                            # Ensure enough room for overlap; fallback if not.
+                            if outgoing_cut_sec < overlap_sec:
+                                outgoing_cut_sec = overlap_sec
+                                transition_type = "Crossfade"
+                                overlap_sec = get_estimated_overlap(transition_type, crossfade_early_ms, 8000, eq_match_ms)
+                                transition_point = "end of track"
+                            else:
+                                transition_point = "chorus end beat align"
+                        else:
+                            # Fallback if no choruses.
+                            outgoing_cut_sec = last_full_duration_sec
+                            transition_type = "Crossfade"
+                            overlap_sec = get_estimated_overlap(transition_type, crossfade_early_ms, 8000, eq_match_ms)
+                            transition_point = "end of track"
+                    else:
+                        outgoing_cut_sec = last_full_duration_sec
+                        transition_point = "beat grid match"
+                    
+                    # Calculate start time for the track (when it begins playing in the mix).
+                    trans_start_mix_sec = last_start_sec + outgoing_cut_sec
+                    start_sec = trans_start_mix_sec - overlap_sec
+                    from_track_title = last_track_meta.get('title')
+                    comment = f"Transition {from_track_title} -> {track.get('title')}. Suggested '{transition_type}' at {transition_point}."
 
-                # Calculate start time for the track in the mix.
-                start_sec = current_mix_length_sec
-                start_delta = timedelta(seconds=start_sec)  # Convert to timedelta for formatting.
-                start_str = (datetime.min + start_delta).strftime("%H:%M:%S")  # Format as HH:MM:SS.
+                # Format start time as string.
+                start_str = format_time(start_sec)
 
                 # Add the transition to the mixing plan.
                 mixing_plan.append({
@@ -231,13 +290,16 @@ def generate_mixing_plan(analyzed_setlist_json, first_fade_in_ms=5000, crossfade
                     "start_time": start_str,
                     "transition_point": transition_point,
                     "transition_type": transition_type,
+                    "outgoing_cut_sec": outgoing_cut_sec,
+                    "overlap_sec": overlap_sec,
                     "otac": float(otac_val),
                     "comment": comment
                 })
 
-                # Update cumulative mix duration, accounting for overlap.
-                current_mix_length_sec += duration_sec - est_overlap_sec
-                last_track = track  # Update the last track for the next iteration.
+                # Update last track info for next iteration.
+                last_start_sec = start_sec
+                last_full_duration_sec = duration_sec
+                last_track_meta = track
 
         # Save the mixing plan to a JSON file.
         with open("mixing_plan.json", "w") as f:
@@ -279,6 +341,7 @@ if __name__ == "__main__":
                         "danceability": 0.52,
                         "has_vocals": true,
                         "segments": [{"label": "L"}],
+                        "choruses": [],
                         "chroma_matrix": null,
                         "transition": "Fade In",
                         "notes": "Balanced Vibe track. Genre: bollywood."
@@ -296,6 +359,7 @@ if __name__ == "__main__":
                         "danceability": 0.8,
                         "has_vocals": true,
                         "segments": [{"label": "H"}],
+                        "choruses": [],
                         "chroma_matrix": null,
                         "transition": "Crossfade",
                         "notes": "Dance Floor Filler track. Genre: r&b."
